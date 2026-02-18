@@ -549,6 +549,153 @@ select option {
   opacity: 0.6;
 }
 
+/* ─── EVIDENCE POPUP ─── */
+.evidence-link {
+  color: var(--blue);
+  text-decoration: none;
+  cursor: pointer;
+  border-bottom: 1px dashed rgba(59, 130, 246, 0.4);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.evidence-link:hover {
+  color: #60a5fa;
+  border-bottom-color: #60a5fa;
+}
+
+.evidence-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease;
+}
+
+.evidence-modal {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  width: 700px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+  animation: slideUp 0.2s ease;
+}
+
+.evidence-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.evidence-modal-header h3 {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.evidence-modal-header h3 span {
+  color: var(--accent);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.evidence-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  transition: color 0.15s, background 0.15s;
+}
+
+.evidence-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.evidence-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.evidence-card {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+
+.evidence-card:hover {
+  border-color: var(--border);
+}
+
+.evidence-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-dim);
+  background: var(--bg-surface);
+}
+
+.evidence-file {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--blue);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.evidence-line {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.evidence-ref-type {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--blue);
+  border: 1px solid rgba(59, 130, 246, 0.15);
+  white-space: nowrap;
+}
+
+.evidence-snippet {
+  padding: 10px 14px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.evidence-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  padding: 0 20px 12px;
+}
+
 /* ─── BROWSE MODAL ─── */
 .modal-overlay {
   position: fixed;
@@ -798,6 +945,18 @@ select option {
   </main>
 </div>
 
+<!-- Evidence Modal -->
+<div class="evidence-overlay hidden" id="evidence-modal">
+  <div class="evidence-modal">
+    <div class="evidence-modal-header">
+      <h3 id="evidence-title">Evidence</h3>
+      <button class="evidence-close" onclick="closeEvidence()">&times;</button>
+    </div>
+    <div class="evidence-body" id="evidence-body"></div>
+    <div class="evidence-count" id="evidence-count"></div>
+  </div>
+</div>
+
 <!-- Browse Modal -->
 <div class="modal-overlay hidden" id="browse-modal">
   <div class="modal">
@@ -928,6 +1087,9 @@ function renderStats(stats, count) {
   `;
 }
 
+// ─── Evidence grouping ───
+let evidenceByPair = {};
+
 function renderResults() {
   const tbody = document.getElementById('results-body');
   const table = document.getElementById('results-table');
@@ -942,11 +1104,14 @@ function renderResults() {
   table.classList.remove('hidden');
   empty.classList.add('hidden');
 
-  // Deduplicate to unique child table + column pairs, keeping highest confidence
+  // Group all results by child table + column, keeping highest confidence for display
   const confRank = { HIGH: 0, MEDIUM: 1, LOW: 2 };
   const bestByPair = {};
+  evidenceByPair = {};
   for (const r of currentResults) {
     const key = `${r.table_name}::${r.column_name}`;
+    if (!evidenceByPair[key]) evidenceByPair[key] = [];
+    evidenceByPair[key].push(r);
     if (!bestByPair[key] || confRank[r.confidence] < confRank[bestByPair[key].confidence]) {
       bestByPair[key] = r;
     }
@@ -966,13 +1131,56 @@ function renderResults() {
     return 0;
   });
 
-  tbody.innerHTML = sorted.map(r => `
+  tbody.innerHTML = sorted.map(r => {
+    const key = `${r.table_name}::${r.column_name}`;
+    const count = evidenceByPair[key] ? evidenceByPair[key].length : 0;
+    return `
     <tr>
       <td><span class="badge badge-${r.confidence}">${r.confidence}</span></td>
-      <td>${esc(r.table_name)}</td>
+      <td><a class="evidence-link" onclick="showEvidence('${escAttr(key)}')">${esc(r.table_name)}</a></td>
       <td class="col-ref">${esc(r.column_name || '\u2014')}</td>
-    </tr>
+    </tr>`;
+  }).join('');
+}
+
+// ─── Evidence popup ───
+function showEvidence(key) {
+  const items = evidenceByPair[key];
+  if (!items || items.length === 0) return;
+
+  const parts = key.split('::');
+  const tableName = parts[0];
+  const colName = parts[1] || '';
+  const title = document.getElementById('evidence-title');
+  title.innerHTML = 'Evidence for <span>' + esc(tableName) + (colName ? '.' + esc(colName) : '') + '</span>';
+
+  const body = document.getElementById('evidence-body');
+  // Sort evidence: HIGH first, then by file path
+  const confRank = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+  const sorted = [...items].sort((a, b) => {
+    const ca = confRank[a.confidence] || 2, cb = confRank[b.confidence] || 2;
+    if (ca !== cb) return ca - cb;
+    return a.file_path.localeCompare(b.file_path);
+  });
+
+  body.innerHTML = sorted.map(r => `
+    <div class="evidence-card">
+      <div class="evidence-card-header">
+        <span class="evidence-file" title="${escAttr(r.file_path)}">${esc(r.file_path)}</span>
+        <span class="evidence-line">L${r.line_number}</span>
+        <span class="evidence-ref-type">${esc(r.reference_type)}</span>
+        <span class="badge badge-${r.confidence}" style="margin-left:4px">${r.confidence}</span>
+      </div>
+      <div class="evidence-snippet">${esc(r.code_snippet || 'No snippet available')}</div>
+    </div>
   `).join('');
+
+  document.getElementById('evidence-count').textContent = sorted.length + ' reference' + (sorted.length !== 1 ? 's' : '') + ' found';
+  document.getElementById('evidence-modal').classList.remove('hidden');
+}
+
+function closeEvidence() {
+  document.getElementById('evidence-modal').classList.add('hidden');
 }
 
 function esc(s) {
@@ -1049,14 +1257,20 @@ function escAttr(s) {
   return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-// Close modal on overlay click
+// Close modals on overlay click
 document.getElementById('browse-modal').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeBrowser();
 });
+document.getElementById('evidence-modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeEvidence();
+});
 
-// Close modal on Escape
+// Close modals on Escape
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeBrowser();
+  if (e.key === 'Escape') {
+    closeEvidence();
+    closeBrowser();
+  }
 });
 </script>
 
