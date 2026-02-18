@@ -2,15 +2,31 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from .file_collector import collect_files
-from .models import Confidence, ScanResult
+from .models import Confidence, FileCategory, ScanResult
 from .output import write_csv
 from .repo import cleanup, clone_repo
 from .scanners import ALL_SCANNERS
+
+
+def _extract_known_tables(categorized: Dict[FileCategory, List[Path]]) -> Set[str]:
+    """Parse schema.rb to get the set of real database table names."""
+    tables: Set[str] = set()
+    create_re = re.compile(r'create_table\s+"(\w+)"')
+    for path in categorized.get(FileCategory.SCHEMA, []):
+        try:
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                m = create_re.search(line)
+                if m:
+                    tables.add(m.group(1))
+        except OSError:
+            pass
+    return tables
 
 
 def run_scan(
@@ -26,6 +42,8 @@ def run_scan(
     categorized = collect_files(repo_path)
     total_files = sum(len(v) for v in categorized.values())
 
+    known_tables = _extract_known_tables(categorized)
+
     all_results: List[ScanResult] = []
     scanner_hits: Dict[str, int] = {}
     for scanner_cls in ALL_SCANNERS:
@@ -36,6 +54,11 @@ def run_scan(
         all_results.extend(results)
 
     deduped = _deduplicate(all_results)
+
+    # Filter out results where the child table isn't a real database table
+    if known_tables:
+        deduped = [r for r in deduped if r.table_name in known_tables]
+
     filtered = [r for r in deduped if r.confidence >= min_confidence]
 
     confidence_order = {Confidence.HIGH: 0, Confidence.MEDIUM: 1, Confidence.LOW: 2}

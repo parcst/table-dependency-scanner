@@ -679,6 +679,15 @@ select option {
   white-space: nowrap;
 }
 
+.evidence-explanation {
+  padding: 8px 14px;
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+  border-bottom: 1px solid var(--border-dim);
+  background: rgba(34, 217, 127, 0.04);
+}
+
 .evidence-snippet {
   padding: 10px 14px;
   font-family: 'JetBrains Mono', monospace;
@@ -1144,10 +1153,42 @@ function renderResults() {
 }
 
 // ─── Evidence popup ───
+function explainMatch(r, targetTable) {
+  const child = r.table_name;
+  const col = r.column_name;
+  const target = targetTable;
+  const explanations = {
+    schema_column: `The "${child}" table defines a column "${col}" in schema.rb, which appears to be a foreign key pointing to "${target}".`,
+    schema_reference: `The "${child}" table has an explicit t.references to "${target}" in schema.rb, creating a foreign key relationship.`,
+    migration_add_reference: `A migration adds a reference from "${child}" to "${target}", creating a foreign key column.`,
+    migration_add_column: `A migration adds the column "${col}" to "${child}", which looks like a foreign key to "${target}".`,
+    migration_add_foreign_key: `A migration explicitly adds a foreign key constraint from "${child}" to "${target}".`,
+    migration_create_table_ref: `The "${child}" table was created with a t.references to "${target}" in its migration.`,
+    migration_remove: `A migration removes a reference or column related to "${target}" from "${child}".`,
+    model_belongs_to: `The model for "${child}" declares belongs_to :${target.replace(/s$/, '')}, meaning each row in "${child}" references one row in "${target}".`,
+    model_has_many: `The model for "${child}" declares has_many :${target}, indicating "${child}" owns multiple "${target}" records.`,
+    model_has_one: `The model for "${child}" declares has_one :${target.replace(/s$/, '')}, indicating a one-to-one relationship with "${target}".`,
+    model_has_many_through: `The model for "${child}" declares has_many through "${target}", using it as a join table.`,
+    model_indirect_association: `The model for "${child}" has an association that references "${target}" via class_name, an indirect relationship.`,
+    raw_sql_column_ref: `Raw SQL in this file references "${col}" or "${target}.id" directly, suggesting a query dependency on "${target}".`,
+    raw_sql_table_ref: `Raw SQL in this file uses a DML statement (SELECT/INSERT/UPDATE/DELETE) that directly targets the "${target}" table.`,
+    raw_sql_join: `Raw SQL in this file JOINs "${target}" with "${child}", linking them via "${col}".`,
+    raw_sql_query_method: `A Rails query method (.where, .joins, .includes, etc.) in this file references "${target}".`,
+    raw_sql_interpolation: `A string interpolation in this file mentions "${target}", possibly constructing a dynamic SQL query.`,
+    config_table_ref: `A YAML config file references "${target}" by name, which may indicate a configuration dependency.`,
+    contextual_variable: `A variable or method name referencing "${target}" appears near query-related code, suggesting a possible dependency.`,
+    contextual_comment: `A code comment mentions "${target}" alongside schema-related keywords (table, column, foreign key, etc.).`,
+    polymorphic_schema: `The "${child}" table has a polymorphic column pair that can point to "${target}" via a type/id pattern.`,
+    polymorphic_model: `A model declares a polymorphic association that can reference "${target}" records.`,
+  };
+  return explanations[r.reference_type] || `This file contains a reference to "${target}" (type: ${r.reference_type}).`;
+}
+
 function showEvidence(key) {
   const items = evidenceByPair[key];
   if (!items || items.length === 0) return;
 
+  const targetTable = document.getElementById('table-input').value.trim() || 'rewards';
   const parts = key.split('::');
   const tableName = parts[0];
   const colName = parts[1] || '';
@@ -1171,6 +1212,7 @@ function showEvidence(key) {
         <span class="evidence-ref-type">${esc(r.reference_type)}</span>
         <span class="badge badge-${r.confidence}" style="margin-left:4px">${r.confidence}</span>
       </div>
+      <div class="evidence-explanation">${esc(explainMatch(r, targetTable))}</div>
       <div class="evidence-snippet">${esc(r.code_snippet || 'No snippet available')}</div>
     </div>
   `).join('');

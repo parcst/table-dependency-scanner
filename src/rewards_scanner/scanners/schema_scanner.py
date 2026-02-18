@@ -20,7 +20,7 @@ class SchemaScanner(BaseScanner):
 
         create_re = re.compile(r'create_table\s+"(\w+)"')
         col_re = re.compile(
-            rf't\.(integer|bigint|references)\s+"?:?({re.escape(singular)}(?:_id)?)"?'
+            rf't\.(integer|bigint|references)\s+"?:?({re.escape(singular)}(?:_id)?)(?!\w)"?'
         )
         ref_re = re.compile(rf't\.references\s+:({re.escape(singular)})\b')
 
