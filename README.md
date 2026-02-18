@@ -14,7 +14,7 @@ Scans a Rails/Ruby codebase to find all references and dependencies on a given d
 
 ```bash
 cd table-dependency-scanner
-PYTHONPATH=src python3 -m rewards_scanner.server
+python3 run.py
 ```
 
 Opens a browser to `http://localhost:8642` where you can:
