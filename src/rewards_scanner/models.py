@@ -39,6 +39,9 @@ class ReferenceType(Enum):
     MODEL_HAS_ONE = "model_has_one"
     MODEL_HAS_MANY_THROUGH = "model_has_many_through"
     MODEL_INDIRECT_ASSOCIATION = "model_indirect_association"
+    # Reverse-direction associations: FK lives on the target table, not the owner
+    MODEL_HAS_MANY_REVERSE = "model_has_many_reverse"
+    MODEL_HAS_ONE_REVERSE = "model_has_one_reverse"
     RAW_SQL_COLUMN_REF = "raw_sql_column_ref"
     RAW_SQL_TABLE_REF = "raw_sql_table_ref"
     RAW_SQL_JOIN = "raw_sql_join"
@@ -70,6 +73,8 @@ class ScanResult:
     reference_type: ReferenceType
     code_snippet: str
     confidence: Confidence
+    # Set to False when schema.rb validation finds the column does not exist in the table
+    schema_verified: bool = True
 
     @property
     def dedup_key(self):

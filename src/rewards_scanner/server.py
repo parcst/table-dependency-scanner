@@ -10,10 +10,11 @@ from http.server import HTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Dict
 
+from .inflection import singularize
 from .models import Confidence, ScanResult
+from .output import write_csv
 from .repo import cleanup, clone_repo
 from .runner import run_scan
-from .output import write_csv
 
 STATIC_DIR = Path(__file__).parent / "static"
 PORT = 8642
@@ -100,6 +101,7 @@ class ScanHandler(SimpleHTTPRequestHandler):
         pk_column = body.get("pkColumn", "id")
         min_confidence_str = body.get("minConfidence", "LOW")
         output_path = body.get("outputPath", "")
+        strict_mode = bool(body.get("strictMode", False))
 
         try:
             min_confidence = Confidence[min_confidence_str]
@@ -125,9 +127,12 @@ class ScanHandler(SimpleHTTPRequestHandler):
                     return
 
             # Derive FK column: singular form of table + "_" + pk (e.g. rewards + id -> reward_id)
-            singular = table_name.rstrip("s")
+            singular = singularize(table_name)
             fk_column = f"{singular}_{pk_column}" if pk_column else ""
-            scan_data = run_scan(repo_path, table_name, min_confidence, fk_column=fk_column)
+            scan_data = run_scan(
+                repo_path, table_name, min_confidence,
+                fk_column=fk_column, strict_mode=strict_mode,
+            )
             results = scan_data["results"]
             stats = scan_data["stats"]
 
@@ -145,6 +150,7 @@ class ScanHandler(SimpleHTTPRequestHandler):
                     "reference_type": r.reference_type.value,
                     "code_snippet": r.code_snippet,
                     "confidence": r.confidence.value,
+                    "schema_verified": r.schema_verified,
                 }
                 for r in results
             ]

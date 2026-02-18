@@ -8,10 +8,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from .file_collector import collect_files
-from .models import Confidence, FileCategory, ScanResult
+from .models import Confidence, FileCategory, ReferenceType, ScanResult
 from .output import write_csv
 from .repo import cleanup, clone_repo
 from .scanners import ALL_SCANNERS
+from .scanners.model_scanner import ModelScanner
 
 
 def _extract_known_tables(categorized: Dict[FileCategory, List[Path]]) -> Set[str]:
@@ -29,11 +30,109 @@ def _extract_known_tables(categorized: Dict[FileCategory, List[Path]]) -> Set[st
     return tables
 
 
+def _extract_schema_columns(categorized: Dict[FileCategory, List[Path]]) -> Dict[str, Set[str]]:
+    """Parse schema.rb to build a mapping of table_name -> set of column names.
+
+    Parses every `create_table` block and collects column names from lines like:
+        t.integer "column_name", ...
+        t.string "column_name", ...
+        t.references :column_name, ...  (stored as column_name_id and column_name_type)
+    """
+    schema_columns: Dict[str, Set[str]] = {}
+    current_table: Optional[str] = None
+
+    create_re = re.compile(r'create_table\s+"(\w+)"')
+    # Matches: t.<type> "col_name" or t.<type> :col_name
+    col_re = re.compile(r'\bt\.(\w+)\s+[":]([\w]+)')
+
+    for path in categorized.get(FileCategory.SCHEMA, []):
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+
+        for line in lines:
+            m = create_re.search(line)
+            if m:
+                current_table = m.group(1)
+                schema_columns.setdefault(current_table, set())
+                continue
+
+            if current_table is None:
+                continue
+
+            m = col_re.search(line)
+            if not m:
+                continue
+
+            col_type = m.group(1)
+            col_name = m.group(2)
+
+            # Skip non-column DSL keywords that match the pattern
+            if col_type in ("index", "timestamps", "primary_key"):
+                continue
+
+            if col_type == "references":
+                # t.references :user  expands to user_id + user_type (if polymorphic)
+                schema_columns[current_table].add(f"{col_name}_id")
+                # Also add the _type column if polymorphic: is mentioned on the same line
+                if "polymorphic:" in line or "polymorphic: true" in line:
+                    schema_columns[current_table].add(f"{col_name}_type")
+            else:
+                schema_columns[current_table].add(col_name)
+
+    return schema_columns
+
+
+def _validate_schema_columns(
+    results: List[ScanResult],
+    schema_columns: Dict[str, Set[str]],
+    strict_mode: bool,
+) -> List[ScanResult]:
+    """Cross-check each result's (table_name, column_name) against schema.rb.
+
+    - strict_mode=True:  remove results where the column is not found in the table.
+    - strict_mode=False: downgrade confidence to LOW and set schema_verified=False.
+
+    Results with empty column_name are skipped (table-level references have no column to check).
+    Results for tables not present in schema are left unchanged (they were already filtered
+    by the known-table pass upstream, or schema.rb wasn't available).
+    """
+    validated: List[ScanResult] = []
+    for r in results:
+        # Nothing to validate when column is unknown/empty
+        if not r.column_name:
+            validated.append(r)
+            continue
+
+        # Table not in schema map -> schema.rb unavailable, pass through
+        if r.table_name not in schema_columns:
+            validated.append(r)
+            continue
+
+        if r.column_name in schema_columns[r.table_name]:
+            # Column confirmed present
+            validated.append(r)
+        else:
+            # Column NOT present in schema
+            if strict_mode:
+                # Drop entirely
+                pass
+            else:
+                r.schema_verified = False
+                # Downgrade to LOW regardless of original confidence
+                r.confidence = Confidence.LOW
+                validated.append(r)
+
+    return validated
+
+
 def run_scan(
     repo_path: Path,
     table_name: str,
     min_confidence: Confidence = Confidence.LOW,
     fk_column: str = "",
+    strict_mode: bool = False,
 ) -> Dict:
     """Run all scanners and return results dict (no file I/O).
 
@@ -43,11 +142,16 @@ def run_scan(
     total_files = sum(len(v) for v in categorized.values())
 
     known_tables = _extract_known_tables(categorized)
+    schema_columns = _extract_schema_columns(categorized)
 
     all_results: List[ScanResult] = []
     scanner_hits: Dict[str, int] = {}
     for scanner_cls in ALL_SCANNERS:
-        scanner = scanner_cls(table_name, fk_column=fk_column)
+        if scanner_cls is ModelScanner:
+            # Pass known_tables so _class_to_table can resolve model class names accurately
+            scanner = scanner_cls(table_name, fk_column=fk_column, known_tables=known_tables)
+        else:
+            scanner = scanner_cls(table_name, fk_column=fk_column)
         results = scanner.scan_all(categorized)
         if results:
             scanner_hits[scanner_cls.__name__] = len(results)
@@ -55,9 +159,22 @@ def run_scan(
 
     deduped = _deduplicate(all_results)
 
+    # Remove reverse-direction association results.
+    # MODEL_HAS_MANY_REVERSE / MODEL_HAS_ONE_REVERSE arise when some other model declares
+    # `has_many :table_name` or `has_one :singular`, meaning the scanned table holds a FK
+    # pointing back to that other model's table (e.g. rewards.business_id → businesses).
+    # That is the opposite of what we are scanning for ("who has a FK to <table>.id"), so
+    # including them causes misleading "Evidence for rewards.business_id" entries in the UI.
+    _REVERSE_TYPES = {ReferenceType.MODEL_HAS_MANY_REVERSE, ReferenceType.MODEL_HAS_ONE_REVERSE}
+    deduped = [r for r in deduped if r.reference_type not in _REVERSE_TYPES]
+
     # Filter out results where the child table isn't a real database table
     if known_tables:
         deduped = [r for r in deduped if r.table_name in known_tables]
+
+    # Validate (table, column) pairs against schema.rb column map
+    if schema_columns:
+        deduped = _validate_schema_columns(deduped, schema_columns, strict_mode=strict_mode)
 
     filtered = [r for r in deduped if r.confidence >= min_confidence]
 
@@ -75,6 +192,7 @@ def run_scan(
             "total_files_scanned": total_files,
             "raw_hits": len(all_results),
             "after_dedup": len(deduped),
+            "after_schema_validation": len(deduped),  # already filtered in-place above
             "after_filter": len(filtered),
             "scanner_hits": scanner_hits,
         },
@@ -88,6 +206,7 @@ def run(
     keep_clone: bool,
     min_confidence: Confidence,
     table_name: str,
+    strict_mode: bool = False,
 ):
     cloned_path = None
     try:
@@ -102,7 +221,7 @@ def run(
 
         print(f"Scanning {repo_path} for '{table_name}' references...", file=sys.stderr)
 
-        scan_data = run_scan(repo_path, table_name, min_confidence)
+        scan_data = run_scan(repo_path, table_name, min_confidence, strict_mode=strict_mode)
         filtered = scan_data["results"]
         stats = scan_data["stats"]
 

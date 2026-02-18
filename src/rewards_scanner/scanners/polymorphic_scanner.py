@@ -85,18 +85,30 @@ class PolymorphicScanner(BaseScanner):
         #   owner_type => "Reward"
         #   WHERE owner_type = 'Reward'
         #   .where(owner_type: 'Reward')
-        # We look for each unconfirmed prefix's _type column near the model class name.
+        #
+        # IMPORTANT: model_class must appear as a quoted string literal, NOT as a
+        # bare Ruby constant or class reference (e.g. Reward::LOYALTY).
+        # In Rails, polymorphic _type columns store the class name as a plain string
+        # ("Reward"), never as a Ruby constant expression (Reward::LOYALTY).
+        # Matching bare constant references causes false positives when a target table
+        # has a same-named column (e.g. rewards.campaign_type) that is populated via
+        # Ruby constants rather than as a polymorphic discriminator.
         unconfirmed_prefixes = {
             prefix for (_, prefix) in poly_pairs if prefix not in confirmed_prefixes
         }
         evidence_prefixes: Set[str] = set()
 
         if unconfirmed_prefixes:
-            # Build a regex that matches any of the prefixes' _type near the model class
             all_code_categories = [
                 FileCategory.MODEL, FileCategory.RUBY_OTHER, FileCategory.ERB,
                 FileCategory.SQL, FileCategory.MIGRATION,
             ]
+            # Build patterns that require model_class as a quoted string literal:
+            #   "Reward"  or  'Reward'
+            model_class_quoted_re = re.compile(
+                r'''['"]{model_class}['"]'''.replace("{model_class}", re.escape(model_class))
+            )
+
             for cat in all_code_categories:
                 for file_path in categorized_files.get(cat, []):
                     file_lines = self._read_file(file_path)
@@ -104,10 +116,10 @@ class PolymorphicScanner(BaseScanner):
                         continue
                     for line in file_lines:
                         for prefix in list(unconfirmed_prefixes):
-                            # Check if this line mentions both the _type column and
-                            # the target model class name
                             type_col = f"{prefix}_type"
-                            if type_col in line and model_class in line:
+                            # Require BOTH the _type column name AND the model class
+                            # as a quoted string on the same line.
+                            if type_col in line and model_class_quoted_re.search(line):
                                 evidence_prefixes.add(prefix)
                                 unconfirmed_prefixes.discard(prefix)
                         if not unconfirmed_prefixes:
