@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "table-dependency-scanner"
+version = "1.1.0"
+description = "Scan a Rails codebase for all references and dependencies on a database table"
+requires-python = ">=3.10"
+
+[project.scripts]
+table-scan = "rewards_scanner.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
