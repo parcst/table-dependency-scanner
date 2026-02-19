@@ -16,6 +16,7 @@ COLUMNS = [
     "reference_type",
     "code_snippet",
     "confidence",
+    "schema_verified",
 ]
 
 
@@ -33,4 +34,5 @@ def write_csv(results: List[ScanResult], dest: IO[str] | None = None):
             r.reference_type.value,
             r.code_snippet,
             r.confidence.value,
+            r.schema_verified,
         ])

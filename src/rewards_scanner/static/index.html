@@ -521,6 +521,104 @@ select option {
   border: 1px solid rgba(122, 133, 153, 0.15);
 }
 
+/* Schema verification badges */
+.badge-verified {
+  background: rgba(34, 217, 127, 0.08);
+  color: #22d97f;
+  border: 1px solid rgba(34, 217, 127, 0.2);
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-unverified {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--red);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* Strict mode toggle */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.toggle-row:hover { border-color: var(--border); }
+
+.toggle-row-label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.toggle-row-desc {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  margin-top: 2px;
+  user-select: none;
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input { display: none; }
+
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  transition: background 0.2s, border-color 0.2s;
+  cursor: pointer;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  left: 2px;
+  top: 2px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(14px);
+  background: var(--red);
+}
+
 /* Empty state */
 .empty-state {
   display: flex;
@@ -916,6 +1014,20 @@ select option {
         </select>
       </div>
 
+      <div>
+        <div class="section-label">Accuracy</div>
+        <label class="toggle-row" for="strict-mode-toggle" title="In strict mode, results whose column does not exist in schema.rb are removed entirely. In normal mode they are kept but downgraded to LOW.">
+          <div>
+            <div class="toggle-row-label">Strict Schema Mode</div>
+            <div class="toggle-row-desc">Remove unverified column matches</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="strict-mode-toggle">
+            <span class="toggle-slider"></span>
+          </label>
+        </label>
+      </div>
+
       <div class="field">
         <label class="field-label" for="output-input">CSV Output Path <span class="optional">(optional)</span></label>
         <div class="browse-row">
@@ -945,6 +1057,7 @@ select option {
               <th data-col="confidence" class="sorted">Confidence <span class="sort-arrow">&#9660;</span></th>
               <th data-col="table_name">Child Table <span class="sort-arrow">&#9650;</span></th>
               <th data-col="column_name">Child Column <span class="sort-arrow">&#9650;</span></th>
+              <th data-col="schema_verified" title="Whether the column was found in schema.rb">Schema <span class="sort-arrow">&#9650;</span></th>
             </tr>
           </thead>
           <tbody id="results-body"></tbody>
@@ -1025,6 +1138,7 @@ async function runScan() {
   const pkColumn = document.getElementById('pk-column-input').value.trim() || 'id';
   const minConfidence = document.getElementById('confidence-select').value;
   const outputPath = document.getElementById('output-input').value.trim();
+  const strictMode = document.getElementById('strict-mode-toggle').checked;
 
   if (source === 'github' && !repo) {
     setStatus('Enter a repository (org/repo)', true);
@@ -1044,7 +1158,7 @@ async function runScan() {
     const resp = await fetch('/api/scan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source, repo, localPath, tableName, pkColumn, minConfidence, outputPath }),
+      body: JSON.stringify({ source, repo, localPath, tableName, pkColumn, minConfidence, outputPath, strictMode }),
     });
     const data = await resp.json();
 
@@ -1142,12 +1256,25 @@ function renderResults() {
 
   tbody.innerHTML = sorted.map(r => {
     const key = `${r.table_name}::${r.column_name}`;
-    const count = evidenceByPair[key] ? evidenceByPair[key].length : 0;
+    // Determine schema_verified for the group: verified if ALL evidence is verified
+    const groupItems = evidenceByPair[key] || [r];
+    const allVerified = groupItems.every(item => item.schema_verified !== false);
+    const hasUnverified = groupItems.some(item => item.schema_verified === false);
+    const hasColumn = r.column_name && r.column_name !== '\u2014';
+    let schemaBadge = '';
+    if (!hasColumn) {
+      schemaBadge = '<span style="color:var(--text-dim);font-size:0.7rem">\u2014</span>';
+    } else if (allVerified) {
+      schemaBadge = '<span class="badge-verified" title="Column confirmed in schema.rb">\u2713 verified</span>';
+    } else {
+      schemaBadge = '<span class="badge-unverified" title="Column NOT found in schema.rb \u2014 possible false positive">\u26A0 unverified</span>';
+    }
     return `
     <tr>
       <td><span class="badge badge-${r.confidence}">${r.confidence}</span></td>
       <td><a class="evidence-link" onclick="showEvidence('${escAttr(key)}')">${esc(r.table_name)}</a></td>
       <td class="col-ref">${esc(r.column_name || '\u2014')}</td>
+      <td>${schemaBadge}</td>
     </tr>`;
   }).join('');
 }
@@ -1165,9 +1292,11 @@ function explainMatch(r, targetTable) {
     migration_add_foreign_key: `A migration explicitly adds a foreign key constraint from "${child}" to "${target}".`,
     migration_create_table_ref: `The "${child}" table was created with a t.references to "${target}" in its migration.`,
     migration_remove: `A migration removes a reference or column related to "${target}" from "${child}".`,
-    model_belongs_to: `The model for "${child}" declares belongs_to :${target.replace(/s$/, '')}, meaning each row in "${child}" references one row in "${target}".`,
+    model_belongs_to: `The model for "${child}" declares belongs_to :${target.replace(/s$/, '')}, meaning each row in "${child}" references one row in "${target}" via the column "${col}".`,
     model_has_many: `The model for "${child}" declares has_many :${target}, indicating "${child}" owns multiple "${target}" records.`,
     model_has_one: `The model for "${child}" declares has_one :${target.replace(/s$/, '')}, indicating a one-to-one relationship with "${target}".`,
+    model_has_many_reverse: `A model's table declares has_many :${target}, meaning the "${target}" table holds the foreign key "${col}" pointing back to that model's table. The FK lives on "${target}", not on the declaring model.`,
+    model_has_one_reverse: `A model's table declares has_one :${target.replace(/s$/, '')}, meaning the "${target}" table holds the foreign key "${col}" pointing back to that model's table. The FK lives on "${target}", not on the declaring model.`,
     model_has_many_through: `The model for "${child}" declares has_many through "${target}", using it as a join table.`,
     model_indirect_association: `The model for "${child}" has an association that references "${target}" via class_name, an indirect relationship.`,
     raw_sql_column_ref: `Raw SQL in this file references "${col}" or "${target}.id" directly, suggesting a query dependency on "${target}".`,
@@ -1204,18 +1333,28 @@ function showEvidence(key) {
     return a.file_path.localeCompare(b.file_path);
   });
 
-  body.innerHTML = sorted.map(r => `
+  body.innerHTML = sorted.map(r => {
+    const isVerified = r.schema_verified !== false;
+    const hasColumn = r.column_name && r.column_name !== '';
+    let verifiedBadge = '';
+    if (hasColumn) {
+      verifiedBadge = isVerified
+        ? '<span class="badge-verified" title="Column confirmed in schema.rb">\u2713 schema ok</span>'
+        : '<span class="badge-unverified" title="Column NOT found in schema.rb">\u26A0 not in schema</span>';
+    }
+    return `
     <div class="evidence-card">
       <div class="evidence-card-header">
         <span class="evidence-file" title="${escAttr(r.file_path)}">${esc(r.file_path)}</span>
         <span class="evidence-line">L${r.line_number}</span>
         <span class="evidence-ref-type">${esc(r.reference_type)}</span>
         <span class="badge badge-${r.confidence}" style="margin-left:4px">${r.confidence}</span>
+        ${verifiedBadge}
       </div>
       <div class="evidence-explanation">${esc(explainMatch(r, targetTable))}</div>
       <div class="evidence-snippet">${esc(r.code_snippet || 'No snippet available')}</div>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 
   document.getElementById('evidence-count').textContent = sorted.length + ' reference' + (sorted.length !== 1 ? 's' : '') + ' found';
   document.getElementById('evidence-modal').classList.remove('hidden');

@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from ..inflection import singularize
 from ..models import FileCategory, ScanResult
 
 
@@ -18,8 +19,8 @@ class BaseScanner(ABC):
 
     def __init__(self, table_name: str, fk_column: str = ""):
         self.table_name = table_name
-        # Derive the singular form (simple: strip trailing 's')
-        self.singular = table_name.rstrip("s")
+        # Derive the singular form using proper inflection rules
+        self.singular = singularize(table_name)
         # Allow overriding the FK column name (default: singular + "_id")
         self.fk_column = fk_column or f"{self.singular}_id"
 
