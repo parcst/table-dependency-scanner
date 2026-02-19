@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from ..inflection import singularize
 from ..models import FileCategory, ScanResult
@@ -24,13 +24,19 @@ class BaseScanner(ABC):
         # Allow overriding the FK column name (default: singular + "_id")
         self.fk_column = fk_column or f"{self.singular}_id"
 
-    def scan_all(self, categorized_files: Dict[FileCategory, List[Path]]) -> List[ScanResult]:
+    def scan_all(
+        self,
+        categorized_files: Dict[FileCategory, List[Path]],
+        on_file: Optional[Callable[[], None]] = None,
+    ) -> List[ScanResult]:
         results = []
         for cat in self.applicable_categories:
             for path in categorized_files.get(cat, []):
                 lines = self._read_file(path)
                 if lines is not None:
                     results.extend(self.scan_file(path, lines, cat))
+                if on_file:
+                    on_file()
         return results
 
     @abstractmethod

@@ -13,7 +13,7 @@ def clone_repo(repo: str) -> Path:
     dest = tmp / "repo"
     print(f"Cloning {repo} into {dest} ...", file=sys.stderr)
     result = subprocess.run(
-        ["gh", "repo", "clone", repo, str(dest)],
+        ["gh", "repo", "clone", repo, str(dest), "--", "--depth", "1"],
         capture_output=True,
         text=True,
     )

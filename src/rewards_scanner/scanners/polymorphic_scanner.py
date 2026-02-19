@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from ..models import Confidence, FileCategory, ReferenceType, ScanResult
 from .base import BaseScanner
@@ -14,7 +14,7 @@ class PolymorphicScanner(BaseScanner):
     def scan_file(self, path: Path, lines: List[str], category: FileCategory) -> List[ScanResult]:
         return []  # Not used — scan_all is overridden
 
-    def scan_all(self, categorized_files: Dict[FileCategory, List[Path]]) -> List[ScanResult]:
+    def scan_all(self, categorized_files: Dict[FileCategory, List[Path]], on_file: Optional[Callable[[], None]] = None) -> List[ScanResult]:
         """Three-pass approach:
         1. Parse schema.rb for polymorphic _type/_id column pairs
         2. Check model files for `has_many/has_one :table, as: :poly` (HIGH)

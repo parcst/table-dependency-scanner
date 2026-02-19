@@ -43,10 +43,11 @@ The scanner analyzes a Rails codebase to find all references and dependencies on
 4. **Deduplication** — keeps highest-confidence result per `(file_path, line_number, reference_type)`.
 5. **Reverse-association filtering** — drops `MODEL_HAS_MANY_REVERSE` and `MODEL_HAS_ONE_REVERSE` results. These arise when another model declares `has_many :table` or `has_one :singular`, meaning the **scanned table itself** holds a FK pointing to that other model's table (e.g. `rewards.business_id → businesses`). This is the opposite direction from what the scanner answers ("which tables have a FK to `<table>.id`"), so including them produces misleading evidence entries.
 6. **Known-table filtering** — discards results where `table_name` isn't in `schema.rb`.
-7. **Schema column validation** — cross-checks each `(table_name, column_name)` pair against the column map from `schema.rb`. Behaviour depends on `strict_mode`:
+7. **Self-table exclusion** — removes results where the child table is the target table itself (the parent table shouldn't appear as its own dependency).
+8. **Schema column validation** — cross-checks each `(table_name, column_name)` pair against the column map from `schema.rb`. Behaviour depends on `strict_mode`:
    - `strict_mode=False` (default): unverified results are downgraded to LOW confidence and `schema_verified=False`.
    - `strict_mode=True`: unverified results are removed entirely.
-8. **Confidence filtering** — filters by user-specified minimum confidence.
+9. **Confidence filtering** — filters by user-specified minimum confidence.
 
 ### Scanner Pattern
 
@@ -95,9 +96,13 @@ Used by `BaseScanner.__init__` and `ModelScanner._class_to_table`.
 
 ### Web UI (server.py)
 
-Stdlib `HTTPServer` serving a single-page app from `static/index.html`. API routes:
+Stdlib `HTTPServer` with `daemon_threads=True` serving a single-page app from `static/index.html`.
+
+Scans run **asynchronously** in a background thread. The frontend polls for progress and can cancel mid-scan. API routes:
 - `GET /api/browse?path=...` — directory listing for path picker
-- `POST /api/scan` — runs scan, returns JSON results + stats
+- `POST /api/scan` — starts an async scan, returns immediately
+- `GET /api/scan/progress` — poll for scan progress or final results
+- `POST /api/scan/cancel` — cancel the running scan
 
 `POST /api/scan` request body fields:
 - `source` — `"local"` or `"github"`
@@ -110,7 +115,15 @@ Stdlib `HTTPServer` serving a single-page app from `static/index.html`. API rout
 
 Each result in the response includes a `schema_verified` boolean field.
 
-The frontend deduplicates results to unique child table + column pairs for display, shows a Schema verification badge (✓ verified / ⚠ unverified) per row, and has a Strict Schema Mode toggle in the sidebar. The evidence popup shows per-evidence schema verification status.
+The frontend deduplicates results to unique child table + column pairs for display, shows a Schema verification badge (✓ verified / ⚠ unverified) per row, and has a Strict Schema Mode toggle in the sidebar. The evidence popup shows per-evidence schema verification status with human-readable explanations.
+
+### Progress & Cancel
+
+The runner accepts optional `progress_cb(phase, detail)` and `cancel_check()` callbacks. Progress is reported per-file (e.g. `Scanning files... (142/830)`) for smooth progress bar updates. The frontend shows a progress bar and a Stop button during scans.
+
+### GitHub Repo Cloning (repo.py)
+
+Uses `gh repo clone` with `--depth 1` for shallow clones (default branch only, latest commit). This is significantly faster for large repos.
 
 ### CSV Output (output.py)
 

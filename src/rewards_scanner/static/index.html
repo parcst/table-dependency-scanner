@@ -322,6 +322,73 @@ select option {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* Scan + Stop buttons */
+.scan-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.scan-buttons .btn-scan {
+  flex: 1;
+  margin-top: 0;
+}
+
+.btn-stop {
+  padding: 12px 18px;
+  background: var(--red-dim);
+  color: var(--red);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius);
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn-stop:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: var(--red);
+}
+
+/* Progress bar */
+.progress-bar-wrap {
+  width: 100%;
+  height: 4px;
+  background: var(--bg-primary);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 10px;
+}
+
+.progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.progress-bar.indeterminate {
+  width: 30%;
+  animation: indeterminate 1.5s ease-in-out infinite;
+}
+
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+.progress-detail {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-top: 6px;
+  min-height: 1.2em;
+}
+
 .source-fields { min-height: 52px; }
 
 .hidden { display: none !important; }
@@ -1036,7 +1103,14 @@ select option {
         </div>
       </div>
 
-      <button class="btn-scan" id="scan-btn" onclick="runScan()">Run Scan</button>
+      <div class="scan-buttons">
+        <button class="btn-scan" id="scan-btn" onclick="runScan()">Run Scan</button>
+        <button class="btn-stop hidden" id="stop-btn" onclick="cancelScan()">Stop</button>
+      </div>
+      <div class="progress-bar-wrap hidden" id="progress-wrap">
+        <div class="progress-bar" id="progress-bar"></div>
+      </div>
+      <div class="progress-detail hidden" id="progress-detail"></div>
     </div>
 
     <!-- Results Panel -->
@@ -1129,8 +1203,78 @@ document.querySelectorAll('.results-table th').forEach(th => {
 });
 
 // ─── Scan ───
-async function runScan() {
+let scanPolling = null;
+let scanCancelled = false;
+
+// Phase progress mapping (approximate percentage for non-scanning phases)
+const phaseProgress = {
+  starting: 3,
+  cloning: 10,
+  collecting: 15,
+  parsing_schema: 20,
+  scanning: null, // dynamic based on files processed
+  processing: 95,
+  done: 100,
+};
+
+function showProgress(phase, detail) {
+  const wrap = document.getElementById('progress-wrap');
+  const bar = document.getElementById('progress-bar');
+  const detailEl = document.getElementById('progress-detail');
+
+  wrap.classList.remove('hidden');
+  detailEl.classList.remove('hidden');
+  detailEl.textContent = detail || phase;
+
+  // Parse file-level progress from detail like "Scanning files... (142/830)"
+  let pct = phaseProgress[phase];
+  if (phase === 'scanning' && detail) {
+    const m = detail.match(/\((\d+)\/(\d+)\)/);
+    if (m) {
+      const cur = parseInt(m[1]), total = parseInt(m[2]);
+      // Scanning phase spans 20% to 95%
+      pct = 20 + (cur / total) * 75;
+    } else {
+      pct = 50;
+    }
+  }
+  if (pct == null) pct = 50;
+
+  bar.classList.remove('indeterminate');
+  if (phase === 'cloning') {
+    bar.style.width = '10%';
+    bar.classList.add('indeterminate');
+  } else {
+    bar.style.width = Math.round(pct) + '%';
+  }
+}
+
+function hideProgress() {
+  document.getElementById('progress-wrap').classList.add('hidden');
+  document.getElementById('progress-detail').classList.add('hidden');
+  const bar = document.getElementById('progress-bar');
+  bar.classList.remove('indeterminate');
+  bar.style.width = '0%';
+}
+
+function setScanUI(scanning) {
   const btn = document.getElementById('scan-btn');
+  const stopBtn = document.getElementById('stop-btn');
+  if (scanning) {
+    btn.disabled = true;
+    btn.classList.add('scanning');
+    btn.innerHTML = '<span class="spinner"></span>Scanning\u2026';
+    stopBtn.classList.remove('hidden');
+  } else {
+    btn.disabled = false;
+    btn.classList.remove('scanning');
+    btn.textContent = 'Run Scan';
+    stopBtn.classList.add('hidden');
+    hideProgress();
+  }
+}
+
+async function runScan() {
   const source = document.querySelector('input[name="source"]:checked').value;
   const repo = document.getElementById('repo-input').value.trim();
   const localPath = document.getElementById('local-input').value.trim();
@@ -1149,10 +1293,10 @@ async function runScan() {
     return;
   }
 
-  btn.disabled = true;
-  btn.classList.add('scanning');
-  btn.innerHTML = '<span class="spinner"></span>Scanning\u2026';
-  setStatus('Scanning\u2026 this may take a moment');
+  scanCancelled = false;
+  setScanUI(true);
+  setStatus('Starting scan...');
+  showProgress('starting', 'Initializing...');
 
   try {
     const resp = await fetch('/api/scan', {
@@ -1162,25 +1306,70 @@ async function runScan() {
     });
     const data = await resp.json();
 
-    if (data.status === 'ok') {
-      currentResults = data.results;
-      renderResults();
-      renderStats(data.stats, data.results.length);
-      if (outputPath) {
-        setStatus(`${data.results.length} results \u2014 CSV saved to ${outputPath}`);
-      } else {
-        setStatus(`${data.results.length} results found`);
-      }
-    } else {
-      setStatus(data.message || 'Scan failed', true);
+    if (data.status !== 'ok') {
+      setStatus(data.message || 'Failed to start scan', true);
+      setScanUI(false);
+      return;
     }
+
+    // Start polling for progress
+    scanPolling = setInterval(async () => {
+      try {
+        const pr = await fetch('/api/scan/progress');
+        const pd = await pr.json();
+
+        if (pd.status === 'ok') {
+          // Final results arrived
+          clearInterval(scanPolling);
+          scanPolling = null;
+          currentResults = pd.results;
+          renderResults();
+          renderStats(pd.stats, pd.results.length);
+          if (outputPath) {
+            setStatus(`${pd.results.length} results \u2014 CSV saved to ${outputPath}`);
+          } else {
+            setStatus(`${pd.results.length} results found`);
+          }
+          setScanUI(false);
+        } else if (pd.status === 'error') {
+          clearInterval(scanPolling);
+          scanPolling = null;
+          setStatus(pd.message || 'Scan failed', true);
+          setScanUI(false);
+        } else if (pd.status === 'cancelled') {
+          clearInterval(scanPolling);
+          scanPolling = null;
+          setStatus('Scan cancelled');
+          setScanUI(false);
+        } else if (pd.status === 'scanning') {
+          showProgress(pd.phase, pd.detail);
+          setStatus(pd.detail || 'Scanning...');
+        }
+      } catch (err) {
+        clearInterval(scanPolling);
+        scanPolling = null;
+        setStatus('Lost connection to server', true);
+        setScanUI(false);
+      }
+    }, 500);
+
   } catch (err) {
     setStatus('Network error: ' + err.message, true);
-  } finally {
-    btn.disabled = false;
-    btn.classList.remove('scanning');
-    btn.textContent = 'Run Scan';
+    setScanUI(false);
   }
+}
+
+async function cancelScan() {
+  scanCancelled = true;
+  if (scanPolling) {
+    clearInterval(scanPolling);
+    scanPolling = null;
+  }
+  try {
+    await fetch('/api/scan/cancel', { method: 'POST' });
+  } catch (e) { /* ignore */ }
+  setStatus('Scan cancelled');
+  setScanUI(false);
 }
 
 function setStatus(msg, isError = false) {

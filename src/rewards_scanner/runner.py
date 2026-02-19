@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 
 from .file_collector import collect_files
 from .models import Confidence, FileCategory, ReferenceType, ScanResult
@@ -133,30 +133,67 @@ def run_scan(
     min_confidence: Confidence = Confidence.LOW,
     fk_column: str = "",
     strict_mode: bool = False,
+    progress_cb: Optional[Callable[[str, str], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> Dict:
     """Run all scanners and return results dict (no file I/O).
 
     Returns dict with keys: results (List[ScanResult]), stats (dict).
+    progress_cb(phase, detail) is called to report progress.
+    cancel_check() should return True if the scan should abort.
     """
+    def _progress(phase: str, detail: str = ""):
+        if progress_cb:
+            progress_cb(phase, detail)
+
+    def _cancelled() -> bool:
+        return cancel_check() if cancel_check else False
+
+    _progress("collecting", "Collecting files...")
     categorized = collect_files(repo_path)
     total_files = sum(len(v) for v in categorized.values())
 
+    if _cancelled():
+        return {"results": [], "stats": {}}
+
+    _progress("parsing_schema", "Parsing schema.rb...")
     known_tables = _extract_known_tables(categorized)
     schema_columns = _extract_schema_columns(categorized)
 
+    if _cancelled():
+        return {"results": [], "stats": {}}
+
+    # Calculate total files across all scanners for accurate progress
+    scan_file_count = 0
+    for scanner_cls in ALL_SCANNERS:
+        for cat in scanner_cls.applicable_categories:
+            scan_file_count += len(categorized.get(cat, []))
+
     all_results: List[ScanResult] = []
     scanner_hits: Dict[str, int] = {}
+    files_processed = 0
+
+    def _on_file():
+        nonlocal files_processed
+        files_processed += 1
+        _progress("scanning", f"Scanning files... ({files_processed}/{scan_file_count})")
+
     for scanner_cls in ALL_SCANNERS:
+        if _cancelled():
+            return {"results": [], "stats": {}}
         if scanner_cls is ModelScanner:
-            # Pass known_tables so _class_to_table can resolve model class names accurately
             scanner = scanner_cls(table_name, fk_column=fk_column, known_tables=known_tables)
         else:
             scanner = scanner_cls(table_name, fk_column=fk_column)
-        results = scanner.scan_all(categorized)
+        results = scanner.scan_all(categorized, on_file=_on_file)
         if results:
             scanner_hits[scanner_cls.__name__] = len(results)
         all_results.extend(results)
 
+    if _cancelled():
+        return {"results": [], "stats": {}}
+
+    _progress("processing", "Deduplicating and filtering results...")
     deduped = _deduplicate(all_results)
 
     # Remove reverse-direction association results.
@@ -171,6 +208,9 @@ def run_scan(
     # Filter out results where the child table isn't a real database table
     if known_tables:
         deduped = [r for r in deduped if r.table_name in known_tables]
+
+    # Exclude the target table itself — it's the parent, not a child dependency
+    deduped = [r for r in deduped if r.table_name != table_name]
 
     # Validate (table, column) pairs against schema.rb column map
     if schema_columns:
