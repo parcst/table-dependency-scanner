@@ -84,6 +84,7 @@ This avoids the previous false positive where `has_many :rewards` in the Checkin
 | `code_snippet` | Up to 200 chars of the matching line |
 | `confidence` | `HIGH`, `MEDIUM`, or `LOW` |
 | `schema_verified` | `True` if column was confirmed in `schema.rb`; `False` if not found |
+| `column_datatype` | Column datatype from `schema.rb` (e.g. `integer`, `bigint`, `string`); empty if unknown |
 
 ### Inflection Module (inflection.py)
 

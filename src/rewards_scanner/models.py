@@ -75,6 +75,8 @@ class ScanResult:
     confidence: Confidence
     # Set to False when schema.rb validation finds the column does not exist in the table
     schema_verified: bool = True
+    # Column datatype from schema.rb (e.g. "integer", "bigint", "string")
+    column_datatype: str = ""
 
     @property
     def dedup_key(self):

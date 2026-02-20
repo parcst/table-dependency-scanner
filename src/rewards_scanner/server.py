@@ -98,6 +98,7 @@ def _run_scan_async(params: Dict[str, Any]):
                 "code_snippet": r.code_snippet,
                 "confidence": r.confidence.value,
                 "schema_verified": r.schema_verified,
+                "column_datatype": r.column_datatype,
             }
             for r in results
         ]

@@ -544,6 +544,12 @@ select option {
   font-size: 0.72rem;
 }
 
+.col-datatype {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--text-dim) !important;
+}
+
 .col-snippet {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.72rem;
@@ -1131,6 +1137,7 @@ select option {
               <th data-col="confidence" class="sorted">Confidence <span class="sort-arrow">&#9660;</span></th>
               <th data-col="table_name">Child Table <span class="sort-arrow">&#9650;</span></th>
               <th data-col="column_name">Child Column <span class="sort-arrow">&#9650;</span></th>
+              <th data-col="column_datatype">Datatype <span class="sort-arrow">&#9650;</span></th>
               <th data-col="schema_verified" title="Whether the column was found in schema.rb">Schema <span class="sort-arrow">&#9650;</span></th>
             </tr>
           </thead>
@@ -1427,6 +1434,10 @@ function renderResults() {
     if (!bestByPair[key] || confRank[r.confidence] < confRank[bestByPair[key].confidence]) {
       bestByPair[key] = r;
     }
+    // Propagate datatype from any result that has it
+    if (r.column_datatype && bestByPair[key] && !bestByPair[key].column_datatype) {
+      bestByPair[key].column_datatype = r.column_datatype;
+    }
   }
   const unique = Object.values(bestByPair);
 
@@ -1463,6 +1474,7 @@ function renderResults() {
       <td><span class="badge badge-${r.confidence}">${r.confidence}</span></td>
       <td><a class="evidence-link" onclick="showEvidence('${escAttr(key)}')">${esc(r.table_name)}</a></td>
       <td class="col-ref">${esc(r.column_name || '\u2014')}</td>
+      <td class="col-datatype">${esc(r.column_datatype || '\u2014')}</td>
       <td>${schemaBadge}</td>
     </tr>`;
   }).join('');

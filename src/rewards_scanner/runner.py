@@ -30,15 +30,15 @@ def _extract_known_tables(categorized: Dict[FileCategory, List[Path]]) -> Set[st
     return tables
 
 
-def _extract_schema_columns(categorized: Dict[FileCategory, List[Path]]) -> Dict[str, Set[str]]:
-    """Parse schema.rb to build a mapping of table_name -> set of column names.
+def _extract_schema_columns(categorized: Dict[FileCategory, List[Path]]) -> Dict[str, Dict[str, str]]:
+    """Parse schema.rb to build a mapping of table_name -> {column_name: datatype}.
 
-    Parses every `create_table` block and collects column names from lines like:
+    Parses every `create_table` block and collects column names and types from lines like:
         t.integer "column_name", ...
         t.string "column_name", ...
         t.references :column_name, ...  (stored as column_name_id and column_name_type)
     """
-    schema_columns: Dict[str, Set[str]] = {}
+    schema_columns: Dict[str, Dict[str, str]] = {}
     current_table: Optional[str] = None
 
     create_re = re.compile(r'create_table\s+"(\w+)"')
@@ -55,7 +55,7 @@ def _extract_schema_columns(categorized: Dict[FileCategory, List[Path]]) -> Dict
             m = create_re.search(line)
             if m:
                 current_table = m.group(1)
-                schema_columns.setdefault(current_table, set())
+                schema_columns.setdefault(current_table, {})
                 continue
 
             if current_table is None:
@@ -74,25 +74,25 @@ def _extract_schema_columns(categorized: Dict[FileCategory, List[Path]]) -> Dict
 
             if col_type == "references":
                 # t.references :user  expands to user_id + user_type (if polymorphic)
-                schema_columns[current_table].add(f"{col_name}_id")
-                # Also add the _type column if polymorphic: is mentioned on the same line
+                schema_columns[current_table][f"{col_name}_id"] = "bigint"
                 if "polymorphic:" in line or "polymorphic: true" in line:
-                    schema_columns[current_table].add(f"{col_name}_type")
+                    schema_columns[current_table][f"{col_name}_type"] = "string"
             else:
-                schema_columns[current_table].add(col_name)
+                schema_columns[current_table][col_name] = col_type
 
     return schema_columns
 
 
 def _validate_schema_columns(
     results: List[ScanResult],
-    schema_columns: Dict[str, Set[str]],
+    schema_columns: Dict[str, Dict[str, str]],
     strict_mode: bool,
 ) -> List[ScanResult]:
     """Cross-check each result's (table_name, column_name) against schema.rb.
 
     - strict_mode=True:  remove results where the column is not found in the table.
     - strict_mode=False: downgrade confidence to LOW and set schema_verified=False.
+    - Attaches column_datatype from schema.rb when available.
 
     Results with empty column_name are skipped (table-level references have no column to check).
     Results for tables not present in schema are left unchanged (they were already filtered
@@ -110,8 +110,10 @@ def _validate_schema_columns(
             validated.append(r)
             continue
 
-        if r.column_name in schema_columns[r.table_name]:
-            # Column confirmed present
+        table_cols = schema_columns[r.table_name]
+        if r.column_name in table_cols:
+            # Column confirmed present — attach datatype
+            r.column_datatype = table_cols[r.column_name]
             validated.append(r)
         else:
             # Column NOT present in schema
