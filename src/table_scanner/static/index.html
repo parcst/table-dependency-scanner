@@ -1,0 +1,1660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Table Dependency Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-deep: #0a0c0f;
+  --bg-primary: #0f1218;
+  --bg-elevated: #161b24;
+  --bg-surface: #1c222e;
+  --bg-hover: #232a38;
+  --border: #2a3245;
+  --border-dim: #1e2536;
+  --text-primary: #c8d1e0;
+  --text-secondary: #7a8599;
+  --text-dim: #4a5568;
+  --accent: #22d97f;
+  --accent-dim: rgba(34, 217, 127, 0.12);
+  --accent-glow: rgba(34, 217, 127, 0.25);
+  --amber: #f0a830;
+  --amber-dim: rgba(240, 168, 48, 0.15);
+  --red: #ef4444;
+  --red-dim: rgba(239, 68, 68, 0.12);
+  --blue: #3b82f6;
+  --radius: 6px;
+  --radius-lg: 10px;
+}
+
+html { font-size: 14px; }
+
+body {
+  font-family: 'Outfit', sans-serif;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Subtle noise texture overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Scanline effect - very subtle */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9998;
+}
+
+.container {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ─── HEADER ─── */
+header {
+  border-bottom: 1px solid var(--border-dim);
+  padding: 20px 0;
+  position: relative;
+}
+
+header::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 200px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+}
+
+.header-inner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.logo-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent-dim), var(--bg-elevated));
+  border: 1px solid rgba(34, 217, 127, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.header-text h1 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.header-text span {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* ─── MAIN LAYOUT ─── */
+main {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 0;
+  min-height: calc(100vh - 80px);
+}
+
+/* ─── SIDEBAR ─── */
+.sidebar {
+  border-right: 1px solid var(--border-dim);
+  padding: 24px 24px 24px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.section-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+/* Source toggle */
+.source-toggle {
+  display: flex;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.source-toggle label {
+  flex: 1;
+  text-align: center;
+  padding: 8px 0;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+  border-right: 1px solid var(--border-dim);
+  user-select: none;
+}
+
+.source-toggle label:last-child { border-right: none; }
+
+.source-toggle input { display: none; }
+
+.source-toggle input:checked + label {
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Form fields */
+.field { margin-bottom: 0; }
+
+.field-label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.field-label .optional {
+  font-weight: 400;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+input[type="text"], select {
+  width: 100%;
+  padding: 9px 12px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+input[type="text"]:focus, select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+input[type="text"]::placeholder {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%237a8599' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 32px;
+  cursor: pointer;
+}
+
+select option {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.browse-row {
+  display: flex;
+  gap: 6px;
+}
+
+.browse-row input { flex: 1; }
+
+.btn-browse {
+  padding: 0 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+  font-family: 'Outfit', sans-serif;
+  font-weight: 500;
+}
+
+.btn-browse:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+/* Scan button */
+.btn-scan {
+  width: 100%;
+  padding: 12px;
+  background: var(--accent);
+  color: var(--bg-deep);
+  border: none;
+  border-radius: var(--radius);
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  letter-spacing: 0.02em;
+  position: relative;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.btn-scan:hover:not(:disabled) {
+  background: #2ae88b;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px var(--accent-glow);
+}
+
+.btn-scan:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-scan:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-scan.scanning {
+  background: var(--bg-elevated);
+  color: var(--accent);
+  border: 1px solid rgba(34, 217, 127, 0.3);
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid transparent;
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Scan + Stop buttons */
+.scan-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.scan-buttons .btn-scan {
+  flex: 1;
+  margin-top: 0;
+}
+
+.btn-stop {
+  padding: 12px 18px;
+  background: var(--red-dim);
+  color: var(--red);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: var(--radius);
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.88rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn-stop:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: var(--red);
+}
+
+/* Progress bar */
+.progress-bar-wrap {
+  width: 100%;
+  height: 4px;
+  background: var(--bg-primary);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 10px;
+}
+
+.progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.progress-bar.indeterminate {
+  width: 30%;
+  animation: indeterminate 1.5s ease-in-out infinite;
+}
+
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+.progress-detail {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin-top: 6px;
+  min-height: 1.2em;
+}
+
+.source-fields { min-height: 52px; }
+
+.hidden { display: none !important; }
+
+/* ─── RESULTS PANEL ─── */
+.results-panel {
+  padding: 24px 0 24px 24px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Stats bar */
+.stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 12px 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  min-height: 46px;
+  flex-shrink: 0;
+}
+
+.stat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stat-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.stat-label {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border-dim);
+}
+
+.status-message {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.status-message.error { color: var(--red); font-style: normal; }
+
+/* Results table */
+.table-wrap {
+  flex: 1;
+  overflow: auto;
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.results-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.results-table th {
+  background: var(--bg-elevated);
+  padding: 10px 14px;
+  text-align: left;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border-dim);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+.results-table th:hover { color: var(--text-secondary); }
+.results-table th.sorted { color: var(--accent); }
+
+.results-table th .sort-arrow {
+  display: inline-block;
+  margin-left: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  font-size: 0.6rem;
+}
+
+.results-table th.sorted .sort-arrow { opacity: 1; }
+
+.results-table td {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-dim);
+  vertical-align: top;
+  color: var(--text-secondary);
+}
+
+.results-table tbody tr {
+  transition: background 0.1s;
+}
+
+.results-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.results-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* Specific column styling */
+.col-file {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--blue) !important;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.col-line {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  text-align: right;
+  color: var(--text-dim) !important;
+  min-width: 36px;
+}
+
+.col-ref {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+}
+
+.col-datatype {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--text-dim) !important;
+}
+
+.col-snippet {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim) !important;
+}
+
+.col-snippet:hover {
+  white-space: normal;
+  word-break: break-all;
+}
+
+/* Confidence badges */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.badge-HIGH {
+  background: rgba(34, 217, 127, 0.12);
+  color: #22d97f;
+  border: 1px solid rgba(34, 217, 127, 0.2);
+}
+
+.badge-MEDIUM {
+  background: var(--amber-dim);
+  color: var(--amber);
+  border: 1px solid rgba(240, 168, 48, 0.2);
+}
+
+.badge-LOW {
+  background: rgba(122, 133, 153, 0.1);
+  color: var(--text-dim);
+  border: 1px solid rgba(122, 133, 153, 0.15);
+}
+
+/* Schema verification badges */
+.badge-verified {
+  background: rgba(34, 217, 127, 0.08);
+  color: #22d97f;
+  border: 1px solid rgba(34, 217, 127, 0.2);
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-unverified {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--red);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* Strict mode toggle */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.toggle-row:hover { border-color: var(--border); }
+
+.toggle-row-label {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.toggle-row-desc {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  margin-top: 2px;
+  user-select: none;
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input { display: none; }
+
+.toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  transition: background 0.2s, border-color 0.2s;
+  cursor: pointer;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  left: 2px;
+  top: 2px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(14px);
+  background: var(--red);
+}
+
+/* Empty state */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 400px;
+  color: var(--text-dim);
+  gap: 12px;
+}
+
+.empty-icon {
+  font-size: 2.5rem;
+  opacity: 0.3;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.empty-state p {
+  font-size: 0.85rem;
+}
+
+.empty-state .hint {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  opacity: 0.6;
+}
+
+/* ─── EVIDENCE POPUP ─── */
+.evidence-link {
+  color: var(--blue);
+  text-decoration: none;
+  cursor: pointer;
+  border-bottom: 1px dashed rgba(59, 130, 246, 0.4);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.evidence-link:hover {
+  color: #60a5fa;
+  border-bottom-color: #60a5fa;
+}
+
+.evidence-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease;
+}
+
+.evidence-modal {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  width: 700px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+  animation: slideUp 0.2s ease;
+}
+
+.evidence-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.evidence-modal-header h3 {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.evidence-modal-header h3 span {
+  color: var(--accent);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.evidence-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  transition: color 0.15s, background 0.15s;
+}
+
+.evidence-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.evidence-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.evidence-card {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-dim);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+
+.evidence-card:hover {
+  border-color: var(--border);
+}
+
+.evidence-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-dim);
+  background: var(--bg-surface);
+}
+
+.evidence-file {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--blue);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.evidence-line {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.evidence-ref-type {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--blue);
+  border: 1px solid rgba(59, 130, 246, 0.15);
+  white-space: nowrap;
+}
+
+.evidence-explanation {
+  padding: 8px 14px;
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  line-height: 1.5;
+  border-bottom: 1px solid var(--border-dim);
+  background: rgba(34, 217, 127, 0.04);
+}
+
+.evidence-snippet {
+  padding: 10px 14px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.evidence-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  padding: 0 20px 12px;
+}
+
+/* ─── BROWSE MODAL ─── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn { from { opacity: 0; } }
+
+.modal {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  width: 520px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+  animation: slideUp 0.2s ease;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(12px); opacity: 0; }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.modal-header h3 {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.modal-path {
+  padding: 10px 20px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.dir-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 20px;
+  cursor: pointer;
+  transition: background 0.1s;
+  font-size: 0.82rem;
+}
+
+.dir-entry:hover {
+  background: var(--bg-hover);
+}
+
+.dir-icon {
+  color: var(--amber);
+  font-size: 0.8rem;
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.dir-entry.parent-dir { color: var(--text-dim); }
+.dir-entry.parent-dir .dir-icon { color: var(--text-dim); }
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border-dim);
+}
+
+.btn-modal {
+  padding: 7px 18px;
+  border-radius: var(--radius);
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: 1px solid var(--border-dim);
+}
+
+.btn-modal-cancel {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.btn-modal-cancel:hover {
+  background: var(--bg-hover);
+}
+
+.btn-modal-select {
+  background: var(--accent);
+  color: var(--bg-deep);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.btn-modal-select:hover {
+  background: #2ae88b;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* Responsive */
+@media (max-width: 900px) {
+  main {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border-dim);
+    padding: 20px 0;
+  }
+  .results-panel {
+    padding: 20px 0;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <div class="header-inner">
+      <div class="logo-mark">T</div>
+      <div class="header-text">
+        <h1>Table Dependency Scanner</h1>
+        <span>Rails table reference analysis</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Sidebar / Config Panel -->
+    <div class="sidebar">
+      <div>
+        <div class="section-label">Source</div>
+        <div class="source-toggle">
+          <input type="radio" name="source" id="src-github" value="github">
+          <label for="src-github">GitHub Repo</label>
+          <input type="radio" name="source" id="src-local" value="local" checked>
+          <label for="src-local">Local Path</label>
+        </div>
+      </div>
+
+      <div class="source-fields">
+        <div id="github-fields" class="hidden">
+          <div class="field">
+            <label class="field-label" for="repo-input">Repository</label>
+            <input type="text" id="repo-input" placeholder="org/repo">
+          </div>
+        </div>
+        <div id="local-fields">
+          <div class="field">
+            <label class="field-label" for="local-input">Directory</label>
+            <div class="browse-row">
+              <input type="text" id="local-input" placeholder="/path/to/rails/app">
+              <button class="btn-browse" onclick="openBrowser('', 'local-input')">Browse</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="table-input">Table Name</label>
+        <input type="text" id="table-input" value="users" placeholder="e.g. users, orders, products">
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="pk-column-input">Primary Key <span class="optional">(default: id)</span></label>
+        <input type="text" id="pk-column-input" value="id" placeholder="id">
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="confidence-select">Min Confidence</label>
+        <select id="confidence-select">
+          <option value="LOW">LOW &mdash; show all</option>
+          <option value="MEDIUM">MEDIUM &mdash; moderate+</option>
+          <option value="HIGH">HIGH &mdash; high only</option>
+        </select>
+      </div>
+
+      <div>
+        <div class="section-label">Accuracy</div>
+        <label class="toggle-row" for="strict-mode-toggle" title="In strict mode, results whose column does not exist in schema.rb are removed entirely. In normal mode they are kept but downgraded to LOW.">
+          <div>
+            <div class="toggle-row-label">Strict Schema Mode</div>
+            <div class="toggle-row-desc">Remove unverified column matches</div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="strict-mode-toggle">
+            <span class="toggle-slider"></span>
+          </label>
+        </label>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="output-input">CSV Output Path <span class="optional">(optional)</span></label>
+        <div class="browse-row">
+          <input type="text" id="output-input" placeholder="/path/to/output.csv">
+          <button class="btn-browse" onclick="openBrowser('', 'output-input')">Browse</button>
+        </div>
+      </div>
+
+      <div class="scan-buttons">
+        <button class="btn-scan" id="scan-btn" onclick="runScan()">Run Scan</button>
+        <button class="btn-stop hidden" id="stop-btn" onclick="cancelScan()">Stop</button>
+      </div>
+      <div class="progress-bar-wrap hidden" id="progress-wrap">
+        <div class="progress-bar" id="progress-bar"></div>
+      </div>
+      <div class="progress-detail hidden" id="progress-detail"></div>
+    </div>
+
+    <!-- Results Panel -->
+    <div class="results-panel">
+      <div class="stats-bar" id="stats-bar">
+        <span class="status-message" id="status-msg">Configure a source and hit Run Scan</span>
+      </div>
+
+      <div class="table-wrap" id="table-wrap">
+        <div class="empty-state" id="empty-state">
+          <div class="empty-icon">&gt;_</div>
+          <p>No scan results yet</p>
+          <span class="hint">Results will appear here after running a scan</span>
+        </div>
+        <table class="results-table hidden" id="results-table">
+          <thead>
+            <tr>
+              <th data-col="confidence" class="sorted">Confidence <span class="sort-arrow">&#9660;</span></th>
+              <th data-col="table_name">Child Table <span class="sort-arrow">&#9650;</span></th>
+              <th data-col="column_name">Child Column <span class="sort-arrow">&#9650;</span></th>
+              <th data-col="column_datatype">Datatype <span class="sort-arrow">&#9650;</span></th>
+              <th data-col="schema_verified" title="Whether the column was found in schema.rb">Schema <span class="sort-arrow">&#9650;</span></th>
+            </tr>
+          </thead>
+          <tbody id="results-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Evidence Modal -->
+<div class="evidence-overlay hidden" id="evidence-modal">
+  <div class="evidence-modal">
+    <div class="evidence-modal-header">
+      <h3 id="evidence-title">Evidence</h3>
+      <button class="evidence-close" onclick="closeEvidence()">&times;</button>
+    </div>
+    <div class="evidence-body" id="evidence-body"></div>
+    <div class="evidence-count" id="evidence-count"></div>
+  </div>
+</div>
+
+<!-- Browse Modal -->
+<div class="modal-overlay hidden" id="browse-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>Select Directory</h3>
+    </div>
+    <div class="modal-path" id="modal-current-path">~</div>
+    <div class="modal-body" id="modal-entries"></div>
+    <div class="modal-footer">
+      <button class="btn-modal btn-modal-cancel" onclick="closeBrowser()">Cancel</button>
+      <button class="btn-modal btn-modal-select" onclick="selectDir()">Select This Directory</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── State ───
+let currentResults = [];
+let sortCol = 'confidence';
+let sortAsc = true;
+let browsePath = '';
+let browseTargetInput = 'local-input';
+
+// ─── Source Toggle ───
+document.querySelectorAll('input[name="source"]').forEach(radio => {
+  radio.addEventListener('change', () => {
+    const isGithub = radio.value === 'github';
+    document.getElementById('github-fields').classList.toggle('hidden', !isGithub);
+    document.getElementById('local-fields').classList.toggle('hidden', isGithub);
+  });
+});
+
+// ─── Sort ───
+document.querySelectorAll('.results-table th').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (sortCol === col) {
+      sortAsc = !sortAsc;
+    } else {
+      sortCol = col;
+      sortAsc = true;
+    }
+    document.querySelectorAll('.results-table th').forEach(h => h.classList.remove('sorted'));
+    th.classList.add('sorted');
+    th.querySelector('.sort-arrow').textContent = sortAsc ? '\u25B2' : '\u25BC';
+    renderResults();
+  });
+});
+
+// ─── Scan ───
+let scanPolling = null;
+let scanCancelled = false;
+
+// Phase progress mapping (approximate percentage for non-scanning phases)
+const phaseProgress = {
+  starting: 3,
+  cloning: 10,
+  collecting: 15,
+  parsing_schema: 20,
+  scanning: null, // dynamic based on files processed
+  processing: 95,
+  done: 100,
+};
+
+function showProgress(phase, detail) {
+  const wrap = document.getElementById('progress-wrap');
+  const bar = document.getElementById('progress-bar');
+  const detailEl = document.getElementById('progress-detail');
+
+  wrap.classList.remove('hidden');
+  detailEl.classList.remove('hidden');
+  detailEl.textContent = detail || phase;
+
+  // Parse file-level progress from detail like "Scanning files... (142/830)"
+  let pct = phaseProgress[phase];
+  if (phase === 'scanning' && detail) {
+    const m = detail.match(/\((\d+)\/(\d+)\)/);
+    if (m) {
+      const cur = parseInt(m[1]), total = parseInt(m[2]);
+      // Scanning phase spans 20% to 95%
+      pct = 20 + (cur / total) * 75;
+    } else {
+      pct = 50;
+    }
+  }
+  if (pct == null) pct = 50;
+
+  bar.classList.remove('indeterminate');
+  if (phase === 'cloning') {
+    bar.style.width = '10%';
+    bar.classList.add('indeterminate');
+  } else {
+    bar.style.width = Math.round(pct) + '%';
+  }
+}
+
+function hideProgress() {
+  document.getElementById('progress-wrap').classList.add('hidden');
+  document.getElementById('progress-detail').classList.add('hidden');
+  const bar = document.getElementById('progress-bar');
+  bar.classList.remove('indeterminate');
+  bar.style.width = '0%';
+}
+
+function setScanUI(scanning) {
+  const btn = document.getElementById('scan-btn');
+  const stopBtn = document.getElementById('stop-btn');
+  if (scanning) {
+    btn.disabled = true;
+    btn.classList.add('scanning');
+    btn.innerHTML = '<span class="spinner"></span>Scanning\u2026';
+    stopBtn.classList.remove('hidden');
+  } else {
+    btn.disabled = false;
+    btn.classList.remove('scanning');
+    btn.textContent = 'Run Scan';
+    stopBtn.classList.add('hidden');
+    hideProgress();
+  }
+}
+
+async function runScan() {
+  const source = document.querySelector('input[name="source"]:checked').value;
+  const repo = document.getElementById('repo-input').value.trim();
+  const localPath = document.getElementById('local-input').value.trim();
+  const tableName = document.getElementById('table-input').value.trim() || 'users';
+  const pkColumn = document.getElementById('pk-column-input').value.trim() || 'id';
+  const minConfidence = document.getElementById('confidence-select').value;
+  const outputPath = document.getElementById('output-input').value.trim();
+  const strictMode = document.getElementById('strict-mode-toggle').checked;
+
+  if (source === 'github' && !repo) {
+    setStatus('Enter a repository (org/repo)', true);
+    return;
+  }
+  if (source === 'local' && !localPath) {
+    setStatus('Enter a local directory path', true);
+    return;
+  }
+
+  scanCancelled = false;
+  setScanUI(true);
+  setStatus('Starting scan...');
+  showProgress('starting', 'Initializing...');
+
+  try {
+    const resp = await fetch('/api/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, repo, localPath, tableName, pkColumn, minConfidence, outputPath, strictMode }),
+    });
+    const data = await resp.json();
+
+    if (data.status !== 'ok') {
+      setStatus(data.message || 'Failed to start scan', true);
+      setScanUI(false);
+      return;
+    }
+
+    // Start polling for progress
+    scanPolling = setInterval(async () => {
+      try {
+        const pr = await fetch('/api/scan/progress');
+        const pd = await pr.json();
+
+        if (pd.status === 'ok') {
+          // Final results arrived
+          clearInterval(scanPolling);
+          scanPolling = null;
+          currentResults = pd.results;
+          renderResults();
+          renderStats(pd.stats, pd.results.length);
+          if (outputPath) {
+            setStatus(`${pd.results.length} results \u2014 CSV saved to ${outputPath}`);
+          } else {
+            setStatus(`${pd.results.length} results found`);
+          }
+          setScanUI(false);
+        } else if (pd.status === 'error') {
+          clearInterval(scanPolling);
+          scanPolling = null;
+          setStatus(pd.message || 'Scan failed', true);
+          setScanUI(false);
+        } else if (pd.status === 'cancelled') {
+          clearInterval(scanPolling);
+          scanPolling = null;
+          setStatus('Scan cancelled');
+          setScanUI(false);
+        } else if (pd.status === 'scanning') {
+          showProgress(pd.phase, pd.detail);
+          setStatus(pd.detail || 'Scanning...');
+        }
+      } catch (err) {
+        clearInterval(scanPolling);
+        scanPolling = null;
+        setStatus('Lost connection to server', true);
+        setScanUI(false);
+      }
+    }, 500);
+
+  } catch (err) {
+    setStatus('Network error: ' + err.message, true);
+    setScanUI(false);
+  }
+}
+
+async function cancelScan() {
+  scanCancelled = true;
+  if (scanPolling) {
+    clearInterval(scanPolling);
+    scanPolling = null;
+  }
+  try {
+    await fetch('/api/scan/cancel', { method: 'POST' });
+  } catch (e) { /* ignore */ }
+  setStatus('Scan cancelled');
+  setScanUI(false);
+}
+
+function setStatus(msg, isError = false) {
+  const el = document.getElementById('status-msg');
+  el.textContent = msg;
+  el.className = 'status-message' + (isError ? ' error' : '');
+}
+
+function renderStats(stats, count) {
+  const bar = document.getElementById('stats-bar');
+  bar.innerHTML = `
+    <div class="stat">
+      <span class="stat-value">${stats.total_files_scanned}</span>
+      <span class="stat-label">files scanned</span>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat">
+      <span class="stat-value">${stats.raw_hits}</span>
+      <span class="stat-label">raw hits</span>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat">
+      <span class="stat-value">${count}</span>
+      <span class="stat-label">results</span>
+    </div>
+    <span class="status-message" id="status-msg"></span>
+  `;
+}
+
+// ─── Evidence grouping ───
+let evidenceByPair = {};
+
+function renderResults() {
+  const tbody = document.getElementById('results-body');
+  const table = document.getElementById('results-table');
+  const empty = document.getElementById('empty-state');
+
+  if (currentResults.length === 0) {
+    table.classList.add('hidden');
+    empty.classList.remove('hidden');
+    return;
+  }
+
+  table.classList.remove('hidden');
+  empty.classList.add('hidden');
+
+  // Group all results by child table + column, keeping highest confidence for display
+  const confRank = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+  const bestByPair = {};
+  evidenceByPair = {};
+  for (const r of currentResults) {
+    const key = `${r.table_name}::${r.column_name}`;
+    if (!evidenceByPair[key]) evidenceByPair[key] = [];
+    evidenceByPair[key].push(r);
+    if (!bestByPair[key] || confRank[r.confidence] < confRank[bestByPair[key].confidence]) {
+      bestByPair[key] = r;
+    }
+    // Propagate datatype from any result that has it
+    if (r.column_datatype && bestByPair[key] && !bestByPair[key].column_datatype) {
+      bestByPair[key].column_datatype = r.column_datatype;
+    }
+  }
+  const unique = Object.values(bestByPair);
+
+  // Default sort: confidence (HIGH first), then child table alphabetically
+  const sorted = [...unique].sort((a, b) => {
+    if (sortCol === 'confidence') {
+      const ca = confRank[a.confidence], cb = confRank[b.confidence];
+      if (ca !== cb) return sortAsc ? ca - cb : cb - ca;
+      return a.table_name.localeCompare(b.table_name);
+    }
+    let va = a[sortCol], vb = b[sortCol];
+    if (va < vb) return sortAsc ? -1 : 1;
+    if (va > vb) return sortAsc ? 1 : -1;
+    return 0;
+  });
+
+  tbody.innerHTML = sorted.map(r => {
+    const key = `${r.table_name}::${r.column_name}`;
+    // Determine schema_verified for the group: verified if ALL evidence is verified
+    const groupItems = evidenceByPair[key] || [r];
+    const allVerified = groupItems.every(item => item.schema_verified !== false);
+    const hasUnverified = groupItems.some(item => item.schema_verified === false);
+    const hasColumn = r.column_name && r.column_name !== '\u2014';
+    let schemaBadge = '';
+    if (!hasColumn) {
+      schemaBadge = '<span style="color:var(--text-dim);font-size:0.7rem">\u2014</span>';
+    } else if (allVerified) {
+      schemaBadge = '<span class="badge-verified" title="Column confirmed in schema.rb">\u2713 verified</span>';
+    } else {
+      schemaBadge = '<span class="badge-unverified" title="Column NOT found in schema.rb \u2014 possible false positive">\u26A0 unverified</span>';
+    }
+    return `
+    <tr>
+      <td><span class="badge badge-${r.confidence}">${r.confidence}</span></td>
+      <td><a class="evidence-link" onclick="showEvidence('${escAttr(key)}')">${esc(r.table_name)}</a></td>
+      <td class="col-ref">${esc(r.column_name || '\u2014')}</td>
+      <td class="col-datatype">${esc(r.column_datatype || '\u2014')}</td>
+      <td>${schemaBadge}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ─── Evidence popup ───
+function explainMatch(r, targetTable) {
+  const child = r.table_name;
+  const col = r.column_name;
+  const target = targetTable;
+  const explanations = {
+    schema_column: `The "${child}" table defines a column "${col}" in schema.rb, which appears to be a foreign key pointing to "${target}".`,
+    schema_reference: `The "${child}" table has an explicit t.references to "${target}" in schema.rb, creating a foreign key relationship.`,
+    migration_add_reference: `A migration adds a reference from "${child}" to "${target}", creating a foreign key column.`,
+    migration_add_column: `A migration adds the column "${col}" to "${child}", which looks like a foreign key to "${target}".`,
+    migration_add_foreign_key: `A migration explicitly adds a foreign key constraint from "${child}" to "${target}".`,
+    migration_create_table_ref: `The "${child}" table was created with a t.references to "${target}" in its migration.`,
+    migration_remove: `A migration removes a reference or column related to "${target}" from "${child}".`,
+    model_belongs_to: `The model for "${child}" declares belongs_to :${target.replace(/s$/, '')}, meaning each row in "${child}" references one row in "${target}" via the column "${col}".`,
+    model_has_many: `The model for "${child}" declares has_many :${target}, indicating "${child}" owns multiple "${target}" records.`,
+    model_has_one: `The model for "${child}" declares has_one :${target.replace(/s$/, '')}, indicating a one-to-one relationship with "${target}".`,
+    model_has_many_reverse: `A model's table declares has_many :${target}, meaning the "${target}" table holds the foreign key "${col}" pointing back to that model's table. The FK lives on "${target}", not on the declaring model.`,
+    model_has_one_reverse: `A model's table declares has_one :${target.replace(/s$/, '')}, meaning the "${target}" table holds the foreign key "${col}" pointing back to that model's table. The FK lives on "${target}", not on the declaring model.`,
+    model_has_many_through: `The model for "${child}" declares has_many through "${target}", using it as a join table.`,
+    model_indirect_association: `The model for "${child}" has an association that references "${target}" via class_name, an indirect relationship.`,
+    raw_sql_column_ref: `Raw SQL in this file references "${col}" or "${target}.id" directly, suggesting a query dependency on "${target}".`,
+    raw_sql_table_ref: `Raw SQL in this file uses a DML statement (SELECT/INSERT/UPDATE/DELETE) that directly targets the "${target}" table.`,
+    raw_sql_join: `Raw SQL in this file JOINs "${target}" with "${child}", linking them via "${col}".`,
+    raw_sql_query_method: `A Rails query method (.where, .joins, .includes, etc.) in this file references "${target}".`,
+    raw_sql_interpolation: `A string interpolation in this file mentions "${target}", possibly constructing a dynamic SQL query.`,
+    config_table_ref: `A YAML config file references "${target}" by name, which may indicate a configuration dependency.`,
+    contextual_variable: `A variable or method name referencing "${target}" appears near query-related code, suggesting a possible dependency.`,
+    contextual_comment: `A code comment mentions "${target}" alongside schema-related keywords (table, column, foreign key, etc.).`,
+    polymorphic_schema: `The "${child}" table has a polymorphic column pair that can point to "${target}" via a type/id pattern.`,
+    polymorphic_model: `A model declares a polymorphic association that can reference "${target}" records.`,
+  };
+  return explanations[r.reference_type] || `This file contains a reference to "${target}" (type: ${r.reference_type}).`;
+}
+
+function showEvidence(key) {
+  const items = evidenceByPair[key];
+  if (!items || items.length === 0) return;
+
+  const targetTable = document.getElementById('table-input').value.trim() || 'users';
+  const parts = key.split('::');
+  const tableName = parts[0];
+  const colName = parts[1] || '';
+  const title = document.getElementById('evidence-title');
+  title.innerHTML = 'Evidence for <span>' + esc(tableName) + (colName ? '.' + esc(colName) : '') + '</span>';
+
+  const body = document.getElementById('evidence-body');
+  // Sort evidence: HIGH first, then by file path
+  const confRank = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+  const sorted = [...items].sort((a, b) => {
+    const ca = confRank[a.confidence] || 2, cb = confRank[b.confidence] || 2;
+    if (ca !== cb) return ca - cb;
+    return a.file_path.localeCompare(b.file_path);
+  });
+
+  body.innerHTML = sorted.map(r => {
+    const isVerified = r.schema_verified !== false;
+    const hasColumn = r.column_name && r.column_name !== '';
+    let verifiedBadge = '';
+    if (hasColumn) {
+      verifiedBadge = isVerified
+        ? '<span class="badge-verified" title="Column confirmed in schema.rb">\u2713 schema ok</span>'
+        : '<span class="badge-unverified" title="Column NOT found in schema.rb">\u26A0 not in schema</span>';
+    }
+    return `
+    <div class="evidence-card">
+      <div class="evidence-card-header">
+        <span class="evidence-file" title="${escAttr(r.file_path)}">${esc(r.file_path)}</span>
+        <span class="evidence-line">L${r.line_number}</span>
+        <span class="evidence-ref-type">${esc(r.reference_type)}</span>
+        <span class="badge badge-${r.confidence}" style="margin-left:4px">${r.confidence}</span>
+        ${verifiedBadge}
+      </div>
+      <div class="evidence-explanation">${esc(explainMatch(r, targetTable))}</div>
+      <div class="evidence-snippet">${esc(r.code_snippet || 'No snippet available')}</div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('evidence-count').textContent = sorted.length + ' reference' + (sorted.length !== 1 ? 's' : '') + ' found';
+  document.getElementById('evidence-modal').classList.remove('hidden');
+}
+
+function closeEvidence() {
+  document.getElementById('evidence-modal').classList.add('hidden');
+}
+
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ─── Directory Browser ───
+async function openBrowser(path, targetInputId) {
+  browseTargetInput = targetInputId || 'local-input';
+  const modal = document.getElementById('browse-modal');
+  modal.classList.remove('hidden');
+  const startPath = path || document.getElementById(browseTargetInput).value.trim() || '';
+  await loadDir(startPath);
+}
+
+function closeBrowser() {
+  document.getElementById('browse-modal').classList.add('hidden');
+}
+
+function selectDir() {
+  const el = document.getElementById(browseTargetInput);
+  if (browseTargetInput === 'output-input') {
+    // For CSV output, append a filename if the user picked a directory
+    el.value = browsePath.endsWith('.csv') ? browsePath : browsePath + '/scan_results.csv';
+  } else {
+    el.value = browsePath;
+  }
+  closeBrowser();
+}
+
+async function loadDir(path) {
+  const entriesEl = document.getElementById('modal-entries');
+  entriesEl.innerHTML = '<div style="padding:20px;color:var(--text-dim);text-align:center">Loading\u2026</div>';
+
+  try {
+    const resp = await fetch('/api/browse?path=' + encodeURIComponent(path));
+    const data = await resp.json();
+
+    if (data.status !== 'ok') {
+      entriesEl.innerHTML = `<div style="padding:20px;color:var(--red)">${esc(data.message)}</div>`;
+      return;
+    }
+
+    browsePath = data.current;
+    document.getElementById('modal-current-path').textContent = data.current;
+
+    let html = '';
+    if (data.parent !== data.current) {
+      html += `<div class="dir-entry parent-dir" onclick="loadDir('${escAttr(data.parent)}')">
+        <span class="dir-icon">\u2190</span> <span>..</span>
+      </div>`;
+    }
+
+    for (const entry of data.entries) {
+      html += `<div class="dir-entry" onclick="loadDir('${escAttr(entry.path)}')">
+        <span class="dir-icon">\u25A0</span> <span>${esc(entry.name)}</span>
+      </div>`;
+    }
+
+    if (!data.entries.length && data.parent === data.current) {
+      html = '<div style="padding:20px;color:var(--text-dim);text-align:center">Empty directory</div>';
+    }
+
+    entriesEl.innerHTML = html;
+  } catch (err) {
+    entriesEl.innerHTML = `<div style="padding:20px;color:var(--red)">Error: ${esc(err.message)}</div>`;
+  }
+}
+
+function escAttr(s) {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+// Close modals on overlay click
+document.getElementById('browse-modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeBrowser();
+});
+document.getElementById('evidence-modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeEvidence();
+});
+
+// Close modals on Escape
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    closeEvidence();
+    closeBrowser();
+  }
+});
+</script>
+
+</body>
+</html>
